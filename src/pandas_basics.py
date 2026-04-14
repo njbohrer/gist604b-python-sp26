@@ -231,7 +231,7 @@ def calculate_station_statistics(df):
           - Average readings per station: 200.0
     """
     
-     print("=" * 50)
+    print("=" * 50)
     print("CALCULATING STATION STATISTICS")
     print("=" * 50)
     
