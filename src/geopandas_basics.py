@@ -504,85 +504,97 @@ def overlay_and_visualize(
         >>> # Just visualize a single layer
         >>> result = overlay_and_visualize(cities, save_path='cities_map.png')
         >>> plt.show()
-    """
-    # TODO: Implement this function
-    # Hints:
-    # - If gdf2 provided, perform overlay with gpd.overlay()
-    # - Create visualization with gdf.plot()
-    # - Add basemap with contextily if available
-    # - For interactive map, use gdf.explore()
-    # - Calculate statistics (feature counts, total area)
-    # - Save figure if save_path provided
-    raise NotImplementedError("overlay_and_visualize not yet implemented")
-
-
-# Helper Functions (provided for you)
-
-def _validate_crs_compatibility(
-    gdf1: gpd.GeoDataFrame, 
-    gdf2: gpd.GeoDataFrame
-) -> Tuple[bool, str]:
-    """
-    Check if two GeoDataFrames have compatible CRS.
+    """   
+    result = {}
     
-    Returns:
-        Tuple of (compatible: bool, message: str)
-    """
-    if gdf1.crs is None:
-        return False, "First GeoDataFrame has no CRS defined"
-    if gdf2.crs is None:
-        return False, "Second GeoDataFrame has no CRS defined"
-    if gdf1.crs != gdf2.crs:
-        return False, f"CRS mismatch: {gdf1.crs} vs {gdf2.crs}"
-    return True, "CRS compatible"
-
-
-def _get_appropriate_utm_crs(gdf: gpd.GeoDataFrame) -> str:
-    """
-    Determine appropriate UTM CRS based on dataset centroid.
-    
-    Returns:
-        EPSG code string for appropriate UTM zone
-    """
-    try:
-        # Get centroid of all geometries
-        centroid = gdf.geometry.centroid.unary_union.centroid
-        lon, lat = centroid.x, centroid.y
+    # If gdf2 is provided, perform overlay operation
+    if gdf2 is not None:
+        # Validate inputs
+        if not isinstance(gdf1, gpd.GeoDataFrame) or not isinstance(gdf2, gpd.GeoDataFrame):
+            raise ValueError("Both inputs must be GeoDataFrames")
         
-        # Calculate UTM zone
-        utm_zone = int((lon + 180) // 6) + 1
+        # Check CRS compatibility
+        if gdf1.crs != gdf2.crs:
+            raise ValueError(
+                f"CRS mismatch: gdf1 has {gdf1.crs}, gdf2 has {gdf2.crs}. "
+                "Transform to same CRS before overlay."
+            )
         
-        # Northern or Southern hemisphere
-        if lat >= 0:
-            epsg_code = 32600 + utm_zone  # UTM North
+        # Validate overlay operation
+        valid_operations = ['intersection', 'union', 'difference', 'symmetric_difference']
+        if overlay_how not in valid_operations:
+            raise ValueError(
+                f"Invalid overlay operation '{overlay_how}'. "
+                f"Must be one of: {', '.join(valid_operations)}"
+            )
+        
+        # Perform overlay
+        overlay_result = gpd.overlay(gdf1, gdf2, how=overlay_how)
+        result['overlay_result'] = overlay_result
+        
+        # Calculate statistics
+        stats = {
+            'operation': overlay_how,
+            'input1_count': len(gdf1),
+            'input2_count': len(gdf2),
+            'output_count': len(overlay_result),
+        }
+        
+        # Calculate areas if geometry is polygons and result is not empty
+        if len(overlay_result) > 0:
+            geom_type = overlay_result.geometry.geom_type.iloc[0]
+            if geom_type in ['Polygon', 'MultiPolygon']:
+                # Use projected CRS for area calculation if in geographic CRS
+                if overlay_result.crs and overlay_result.crs.is_geographic:
+                    overlay_proj = overlay_result.to_crs('EPSG:6933')  # Equal Area
+                    total_area_km2 = overlay_proj.geometry.area.sum() / 1e6
+                else:
+                    total_area_km2 = overlay_result.geometry.area.sum() / 1e6
+                stats['total_area_km2'] = float(total_area_km2)
+        
+        result['statistics'] = stats
+        
+        # Create visualization
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+        if len(overlay_result) > 0:
+            overlay_result.plot(ax=ax, alpha=0.7, edgecolor='black', cmap='viridis')
         else:
-            epsg_code = 32700 + utm_zone  # UTM South
-            
-        return f'EPSG:{epsg_code}'
-    except Exception:
-        return 'EPSG:3857'  # Web Mercator as fallback
+            # Plot original datasets if overlay is empty
+            gdf1.plot(ax=ax, alpha=0.5, edgecolor='red')
+            gdf2.plot(ax=ax, alpha=0.5, edgecolor='blue')
 
-
-def _calculate_geometry_statistics(gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
-    """
-    Calculate comprehensive geometry statistics.
+            legend_elements = [
+                Patch(facecolor='none', edgecolor='red', label='GDF1'),
+                Patch(facecolor='none', edgecolor='blue', label='GDF2')
+            ]
+            ax.legend(handles=legend_elements)
+        ax.set_title(f"Overlay Result: {overlay_how.title()}", fontsize=14)
+        ax.set_xlabel('Longitude')
+        ax.set_ylabel('Latitude')
+        plt.tight_layout()
+        
+    else:
+        # Visualization only (no overlay)
+        result['statistics'] = {
+            'feature_count': len(gdf1),
+            'geometry_types': gdf1.geometry.geom_type.unique().tolist()
+        }
+        
+        # Create visualization
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+        gdf1.plot(ax=ax, alpha=0.7, edgecolor='black', cmap='viridis')
+        ax.set_title("Spatial Data Visualization", fontsize=14)
+        ax.set_xlabel('Longitude')
+        ax.set_ylabel('Latitude')
+        plt.tight_layout()
     
-    Returns:
-        Dictionary of statistics including counts, areas, lengths
-    """
-    stats = {
-        'feature_count': len(gdf),
-        'geometry_types': gdf.geometry.geom_type.value_counts().to_dict()
-    }
+    result['figure'] = fig
     
-    # Calculate areas for polygons
-    if any(gdf.geometry.geom_type.isin(['Polygon', 'MultiPolygon'])):
-        stats['total_area'] = gdf.geometry.area.sum()
-        stats['mean_area'] = gdf.geometry.area.mean()
+    # Save figure if path provided
+    if save_path:
+        save_path = Path(save_path)
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        result['saved_path'] = str(save_path)
     
-    # Calculate lengths for lines
-    if any(gdf.geometry.geom_type.isin(['LineString', 'MultiLineString'])):
-        stats['total_length'] = gdf.geometry.length.sum()
-        stats['mean_length'] = gdf.geometry.length.mean()
-    
+    return result
     return stats
